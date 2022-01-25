@@ -1,0 +1,1 @@
+# cloudflare-functions-scalajs
