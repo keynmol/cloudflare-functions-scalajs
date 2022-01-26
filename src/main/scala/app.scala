@@ -7,7 +7,7 @@ def request_headers(context: Any) =
   println(context)
   "hello"
 
-@JSExportTopLevel(name = "onRequest", moduleID = "request_method")
+@JSExportTopLevel(name = "onRequestGet", moduleID = "request_method")
 def request_method(context: Any) =
   println(context)
   "bye"
