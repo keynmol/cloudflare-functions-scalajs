@@ -256,11 +256,16 @@ object Logic:
           cls   := "container",
           style := "padding:20px;",
           h1("Hot takes galore"),
-          takes.map(renderHotTake)
+          takes.map(renderHotTake),
+          a(
+            href := "https://blog.indoorvivants.com/2022-01-25-cloudflare-functions-with-scalajs",
+            "What's going on?"
+          )
         )
       )
     )
   end renderHotTakes
+
 end Logic
 
 trait OpaqueString[T](using ap: T =:= String):
