@@ -1,0 +1,15 @@
+*.class
+*.tasty
+.metals
+.bloop
+.bsp
+.sbt
+.cache
+target
+
+**/target/**
+
+functions/
+node_modules/
+project/metals.sbt
+project/project
