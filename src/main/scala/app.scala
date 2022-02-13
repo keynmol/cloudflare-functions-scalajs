@@ -55,7 +55,8 @@ def vote(context: EventContext[JSDynamic, String, Params]) =
   given Votes              = Votes(database)
   given blocks: IPBlocks   = IPBlocks(database)
 
-  val headers = context.request.headers
+  val headers     = context.request.headers
+  val redirectUri = global.URL(context.request.url).setPathname("/").toString
 
   for
     // processing input
@@ -67,19 +68,38 @@ def vote(context: EventContext[JSDynamic, String, Params]) =
     vote      = voteData._2
 
     // verifying data state
+    _ = println(hotTakeId)
     hotTakeExists <- hotTakes.get(hotTakes.key(hotTakeId.raw)).map(_.isDefined)
     blocked       <- votingIsBlocked(ip, hotTakeId)
+    _ = println(hotTakeExists)
 
     result <-
       if hotTakeExists && !blocked then
         // block IP and change vote counter
         blockVoting(ip, hotTakeId) *>
           changeVote(hotTakeId, vote) *>
-          Promise.resolve(global.Response(""))
+          Promise.resolve(global.Response.redirect(redirectUri))
       else Promise.resolve(badRequest("NO! STOP! NOOOOOOOO!"))
   yield result
   end for
 end vote
+
+@JSExportTopLevel(name = "onRequestGet", moduleID = "index")
+def index(context: EventContext[JSDynamic, String, Params]) =
+  val database = context.env.HOT_TAKERY.asInstanceOf[KVNamespace]
+
+  given HotTakes = HotTakes(database)
+  given Votes    = Votes(database)
+
+  val htmlHeaders =
+    ResponseInit().setHeadersVarargs(
+      scala.scalajs.js.Tuple2("Content-type", "text/html")
+    )
+
+  listHotTakes.map { takes =>
+    global.Response(renderHotTakes(takes).render, htmlHeaders)
+  }
+end index
 
 extension [A](p: Promise[A])
   inline def map[B](inline f: A => B)(using
@@ -158,11 +178,96 @@ object Logic:
       case Some(o) => Promise.resolve(o)
 
   end extractVote
+
+  def getHotTake(
+      id: HotTakeID
+  )(using
+      hotTakes: HotTakes,
+      votes: Votes
+  ): Promise[Option[HotTake]] =
+    for
+      retrieved      <- hotTakes.get(hotTakes.key(id.raw))
+      retrievedCount <- votes.get(votes.key(id.raw))
+
+      info  = retrieved.map(_.into(HotTakeInfo))
+      count = retrievedCount.flatMap(_.raw.toIntOption) orElse Option(0)
+    yield (info zip count).map { case (i, cnt) => HotTake(id, i, cnt) }
+
+  def listHotTakes(using
+      hotTakes: HotTakes,
+      votes: Votes
+  ): Promise[List[HotTake]] =
+    hotTakes.list().flatMap { keys =>
+      val ids = keys.map(_.into(HotTakeID)).map(getHotTake)
+      Promise.all(scalajs.js.Array.apply(ids*)).map(_.toList.flatten)
+    }
+
+  def renderHotTake(take: HotTake) =
+    import scalatags.Text.all.*
+    div(
+      cls := "card",
+      div(
+        cls := "card-body",
+        div(
+          cls := "row",
+          div(cls := "col-2", style := "text-align: center", h1(take.votes)),
+          div(
+            cls := "col-6",
+            cls := "align-middle",
+            h2(cls := "card-title", take.info.raw)
+          ),
+          div(
+            cls := "col-3",
+            form(
+              action := "/vote",
+              method := "POST",
+              input(`type` := "hidden", name := "id", value := take.id.raw),
+              input(
+                `type` := "submit",
+                value  := "yah",
+                name   := "vote",
+                cls    := "btn btn-success"
+              ),
+              input(
+                `type` := "submit",
+                value  := "nah",
+                name   := "vote",
+                cls    := "btn btn-danger"
+              )
+            )
+          )
+        )
+      )
+    )
+  end renderHotTake
+
+  def renderHotTakes(takes: List[HotTake]) =
+    import scalatags.Text.all.*
+    html(
+      head(
+        scalatags.Text.tags2.title("Reviews"),
+        link(
+          href := "https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css",
+          rel := "stylesheet"
+        )
+      ),
+      body(
+        div(
+          cls   := "container",
+          style := "padding:20px;",
+          h1("Hot takes galore"),
+          takes.map(renderHotTake)
+        )
+      )
+    )
+  end renderHotTakes
 end Logic
 
 trait OpaqueString[T](using ap: T =:= String):
-  def apply(s: String): T  = ap.flip(s)
-  extension (k: T) def raw = ap(k)
+  def apply(s: String): T = ap.flip(s)
+  extension (k: T)
+    def raw                                = ap(k)
+    def into[X](other: OpaqueString[X]): X = other.apply(raw)
 
 object KV:
   opaque type Key = String
@@ -190,6 +295,11 @@ object Domain:
   opaque type HotTakeID = String
   object HotTakeID extends OpaqueString[HotTakeID]
 
+  opaque type HotTakeInfo = String
+  object HotTakeInfo extends OpaqueString[HotTakeInfo]
+
+  case class HotTake(id: HotTakeID, info: HotTakeInfo, votes: Int)
+
   enum Vote:
     case Yah, Nah
 end Domain
@@ -198,9 +308,14 @@ trait KV[T](scope: String)(using ap: T =:= KVNamespace):
   def apply(kv: KVNamespace): T = ap.flip(kv)
 
   extension (kv: T)
-    def key(str: String): KV.Key = KV.Key(scope + str)
+    def key(str: String): KV.Key = KV.Key(str)
+
+    def descope(key: KV.Key): KV.Key =
+      if key.raw.startsWith(scope) then KV.Key(key.raw.drop(scope.length))
+      else key
 
     def get(key: KV.Key): Promise[Option[KV.Value]] =
+      println(s"Retrieving ${scope + key.raw}")
       ap(kv)
         .get(scope + key.raw)
         .`then`(str => Option(str))
@@ -223,6 +338,6 @@ trait KV[T](scope: String)(using ap: T =:= KVNamespace):
     def list(): Promise[List[KV.Key]] =
       ap(kv)
         .list(KVNamespaceListOptions.apply().setPrefix(scope))
-        .`then`(result => result.keys.map(k => KV.Key(k.name)).toList)
+        .`then`(result => result.keys.map(k => descope(KV.Key(k.name))).toList)
   end extension
 end KV
