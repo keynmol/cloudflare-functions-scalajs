@@ -18,6 +18,8 @@ lazy val buildWorkers = taskKey[Unit]("Copy Scala.js output to the ./function fo
 buildWorkers := {
   // where Scala.js puts the generated .js files
   val output = (Compile / fastLinkJS / scalaJSLinkerOutputDirectory).value
+  // trigger (if necessary) JS compilation
+  val _      = (Compile / fastLinkJS).value
 
   // where (relative to root of our build) we want to copy them
   val destination = (ThisBuild / baseDirectory).value / "functions"
