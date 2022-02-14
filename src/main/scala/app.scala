@@ -13,6 +13,8 @@ import scala.util.NotGiven
 
 type Params = std.Record[String, scala.Any]
 
+// --- FUNCTIONS
+
 @JSExportTopLevel(name = "onRequest", moduleID = "request_headers")
 def request_headers(context: EventContext[Any, String, Params]) =
   val str = StringBuilder()
@@ -53,7 +55,7 @@ def vote(context: EventContext[JSDynamic, String, Params]) =
 
   given hotTakes: HotTakes = HotTakes(database)
   given Votes              = Votes(database)
-  given blocks: IPBlocks   = IPBlocks(database)
+  given IPBlocks           = IPBlocks(database)
 
   val headers     = context.request.headers
   val redirectUri = global.URL(context.request.url).setPathname("/").toString
@@ -67,19 +69,23 @@ def vote(context: EventContext[JSDynamic, String, Params]) =
     hotTakeId = voteData._1
     vote      = voteData._2
 
-    // verifying data state
-    _ = println(hotTakeId)
     hotTakeExists <- hotTakes.get(hotTakes.key(hotTakeId.raw)).map(_.isDefined)
     blocked       <- votingIsBlocked(ip, hotTakeId)
-    _ = println(hotTakeExists)
 
     result <-
-      if hotTakeExists && !blocked then
+      if !hotTakeExists then
+        Promise.resolve(badRequest("Hot take doesn't exist!"))
+      else if blocked then
+        Promise.resolve(
+          badRequest(
+            "You are termporarily blocked from voting for this hot take"
+          )
+        )
+      else
         // block IP and change vote counter
         blockVoting(ip, hotTakeId) *>
           changeVote(hotTakeId, vote) *>
           Promise.resolve(global.Response.redirect(redirectUri))
-      else Promise.resolve(badRequest("NO! STOP! NOOOOOOOO!"))
   yield result
   end for
 end vote
@@ -100,20 +106,6 @@ def index(context: EventContext[JSDynamic, String, Params]) =
     global.Response(renderHotTakes(takes).render, htmlHeaders)
   }
 end index
-
-extension [A](p: Promise[A])
-  inline def map[B](inline f: A => B)(using
-      @implicitNotFound("Seems like you need `flatMap` instead of `map`")
-      ev: NotGiven[B <:< Promise[?]]
-  ): Promise[B] =
-    p.`then`(f)
-
-  inline def flatMap[B](inline f: A => Promise[B]): Promise[B] =
-    p.`then`(f)
-
-  inline def *>[B](other: Promise[B]): Promise[B] =
-    flatMap(_ => other)
-end extension
 
 object Logic:
   def badRequest(msg: String): Response =
@@ -308,6 +300,22 @@ object Domain:
   enum Vote:
     case Yah, Nah
 end Domain
+
+// --- Definitions and QoL interfaces
+
+extension [A](p: Promise[A])
+  inline def map[B](inline f: A => B)(using
+      @implicitNotFound("Seems like you need `flatMap` instead of `map`")
+      ev: NotGiven[B <:< Promise[?]]
+  ): Promise[B] =
+    p.`then`(f)
+
+  inline def flatMap[B](inline f: A => Promise[B]): Promise[B] =
+    p.`then`(f)
+
+  inline def *>[B](other: Promise[B]): Promise[B] =
+    flatMap(_ => other)
+end extension
 
 trait KV[T](scope: String)(using ap: T =:= KVNamespace):
   def apply(kv: KVNamespace): T = ap.flip(kv)
