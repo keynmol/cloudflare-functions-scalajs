@@ -246,7 +246,7 @@ object Logic:
           h1("Hot takes galore"),
           takes.map(renderHotTake),
           a(
-            href := "https://blog.indoorvivants.com/2022-01-25-cloudflare-functions-with-scalajs",
+            href := "https://blog.indoorvivants.com/2022-02-14-cloudflare-functions-with-scalajs",
             "What's going on?"
           )
         )
