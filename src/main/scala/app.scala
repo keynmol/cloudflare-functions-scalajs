@@ -71,13 +71,10 @@ def vote(context: EventContext[JSDynamic, String, Params]) =
     blocked       <- votingIsBlocked(ip, hotTakeId)
 
     result <-
-      if !hotTakeExists then
-        Promise.resolve(badRequest("Hot take doesn't exist!"))
+      if !hotTakeExists then badRequest("Hot take doesn't exist!")
       else if blocked then
-        Promise.resolve(
-          badRequest(
-            "You are termporarily blocked from voting for this hot take"
-          )
+        badRequest(
+          "You are temporarily blocked from voting for this hot take"
         )
       else
         // block IP and change vote counter
@@ -106,8 +103,8 @@ def index(context: EventContext[JSDynamic, String, Params]) =
 end index
 
 object Logic:
-  def badRequest(msg: String): Response =
-    global.Response(msg, ResponseInit().setStatus(400))
+  def badRequest(msg: String): Promise[Response] =
+    Promise.resolve(global.Response(msg, ResponseInit().setStatus(400)))
 
   def getIP(headers: Headers): Promise[IP] =
     val ipSource =
@@ -189,6 +186,7 @@ object Logic:
   ): Promise[List[HotTake]] =
     hotTakes.list().flatMap { keys =>
       val ids = keys.map(_.into(HotTakeID)).map(getHotTake)
+
       Promise.all(scalajs.js.Array.apply(ids*)).map(_.toList.flatten)
     }
 
