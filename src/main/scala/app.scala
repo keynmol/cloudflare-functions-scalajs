@@ -32,7 +32,7 @@ def test_db(context: EventContext[JSDynamic, String, Params]) =
   val database = context.env.HOT_TAKERY.asInstanceOf[KVNamespace]
 
   def getCurrent: Promise[Int] =
-    database.get("test-counter").`then` {
+    database.get("test-counter").map {
       case null => 0
       case str  => str.toInt
     }
@@ -40,8 +40,8 @@ def test_db(context: EventContext[JSDynamic, String, Params]) =
   def put(value: Int): Promise[Unit] =
     database.put("test-counter", value.toString)
 
-  getCurrent.`then`(num =>
-    put(num + 1).`then`(_ => global.Response(s"Current value is $num"))
+  getCurrent.flatMap(num =>
+    put(num + 1).map(_ => global.Response(s"Current value is $num"))
   )
 end test_db
 
@@ -63,13 +63,11 @@ def vote(context: EventContext[JSDynamic, String, Params]) =
   for
     // processing input
     formData <- context.request.formData()
-    voteData <- extractVote(formData)
     ip       <- getIP(headers)
 
-    hotTakeId = voteData._1
-    vote      = voteData._2
+    case VoteAction(hotTakeId, vote) <- extractVote(formData)
 
-    hotTakeExists <- hotTakes.get(hotTakes.key(hotTakeId.raw)).map(_.isDefined)
+    hotTakeExists <- hotTakes.get(hotTakeId.into(KV.Key)).map(_.isDefined)
     blocked       <- votingIsBlocked(ip, hotTakeId)
 
     result <-
@@ -126,20 +124,20 @@ object Logic:
   ): Promise[Unit] =
     import scala.concurrent.duration.*
 
-    val key = db.key(ip.raw + "-" + hotTakeId.raw)
+    val key = KV.Key(ip.raw + "-" + hotTakeId.raw)
 
     db.putWithExpiration(key, KV.Value(""), 24.hours)
 
   def votingIsBlocked(ip: IP, hotTakeId: HotTakeID)(using
       db: IPBlocks
   ): Promise[Boolean] =
-    val key = db.key(ip.raw + "-" + hotTakeId.raw)
+    val key = KV.Key(ip.raw + "-" + hotTakeId.raw)
     db.get(key).map(_.isDefined)
 
   def changeVote(hotTakeId: HotTakeID, vote: Vote)(using
       db: Votes
   ): Promise[Unit] =
-    val key = db.key(hotTakeId.raw)
+    val key = hotTakeId.into(KV.Key)
     for
       current <- db.get(key)
       intValue = current.flatMap(_.raw.toIntOption).getOrElse(0)
@@ -150,7 +148,7 @@ object Logic:
     yield ()
   end changeVote
 
-  def extractVote(fd: FormData): Promise[(HotTakeID, Vote)] =
+  def extractVote(fd: FormData): Promise[VoteAction] =
     val hotTakeId: Option[HotTakeID] =
       Option(fd.get("id"))
         .collectFirst { case s: String =>
@@ -165,7 +163,7 @@ object Logic:
         case "nah" => Vote.Nah
       }
 
-    hotTakeId.zip(vote) match
+    hotTakeId.zip(vote).map(VoteAction.apply) match
       case None    => Promise.reject("Form data is invalid")
       case Some(o) => Promise.resolve(o)
 
@@ -178,8 +176,8 @@ object Logic:
       votes: Votes
   ): Promise[Option[HotTake]] =
     for
-      retrieved      <- hotTakes.get(hotTakes.key(id.raw))
-      retrievedCount <- votes.get(votes.key(id.raw))
+      retrieved      <- hotTakes.get(id.into(KV.Key))
+      retrievedCount <- votes.get(id.into(KV.Key))
 
       info  = retrieved.map(_.into(HotTakeInfo))
       count = retrievedCount.flatMap(_.raw.toIntOption) orElse Option(0)
@@ -296,6 +294,7 @@ object Domain:
   object HotTakeInfo extends OpaqueString[HotTakeInfo]
 
   case class HotTake(id: HotTakeID, info: HotTakeInfo, votes: Int)
+  case class VoteAction(hotTake: HotTakeID, vote: Vote)
 
   enum Vote:
     case Yah, Nah
@@ -313,6 +312,12 @@ extension [A](p: Promise[A])
   inline def flatMap[B](inline f: A => Promise[B]): Promise[B] =
     p.`then`(f)
 
+  inline def withFilter(inline pred: A => Boolean): Promise[A] =
+    flatMap { a =>
+      if pred(a) then Promise.resolve(a)
+      else Promise.reject(MatchError(a))
+    }
+
   inline def *>[B](other: Promise[B]): Promise[B] =
     flatMap(_ => other)
 end extension
@@ -321,18 +326,15 @@ trait KV[T](scope: String)(using ap: T =:= KVNamespace):
   def apply(kv: KVNamespace): T = ap.flip(kv)
 
   extension (kv: T)
-    def key(str: String): KV.Key = KV.Key(str)
-
     def descope(key: KV.Key): KV.Key =
       if key.raw.startsWith(scope) then KV.Key(key.raw.drop(scope.length))
       else key
 
     def get(key: KV.Key): Promise[Option[KV.Value]] =
-      println(s"Retrieving ${scope + key.raw}")
       ap(kv)
         .get(scope + key.raw)
-        .`then`(str => Option(str))
-        .`then`(_.map(KV.Value.apply))
+        .map(str => Option(str))
+        .map(_.map(KV.Value.apply))
 
     def put(key: KV.Key, value: KV.Value): Promise[Unit] =
       ap(kv).put(scope + key.raw, value.raw)
@@ -351,6 +353,6 @@ trait KV[T](scope: String)(using ap: T =:= KVNamespace):
     def list(): Promise[List[KV.Key]] =
       ap(kv)
         .list(KVNamespaceListOptions.apply().setPrefix(scope))
-        .`then`(result => result.keys.map(k => descope(KV.Key(k.name))).toList)
+        .map(result => result.keys.map(k => descope(KV.Key(k.name))).toList)
   end extension
 end KV
